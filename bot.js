@@ -36,7 +36,7 @@ function createBot() {
     port: config.serverPort,
     username: config.botUsername,
     auth: 'offline',
-    version: false,
+    version: '1.21.4',          // <--- ESPECIFICADA PARA PURPUR 26.1.2
     viewDistance: config.botChunk || 4,
     checkTimeoutInterval: 120000,
     hideErrors: false,
