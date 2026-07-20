@@ -1,165 +1,187 @@
 const mineflayer = require('mineflayer');
 const config = require('./config.json');
+const express = require('express');
 
 // ============================================
-// CONFIGURACIÓN DEL BOT
+// SERVIDOR HTTP PARA RENDER
 // ============================================
-const bot = mineflayer.createBot({
-  host: config.serverHost,
-  port: config.serverPort,
-  username: config.botUsername,
-  auth: 'offline',
-  version: false,
-  viewDistance: config.botChunk || 4,
-  checkTimeoutInterval: 60000,  // Timeout más largo
-  hideErrors: true
+const app = express();
+const port = process.env.PORT || 10000;
+
+app.get('/', (req, res) => {
+  res.send('🤖 Bot de mantenimiento activo!');
+});
+
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
+app.listen(port, '0.0.0.0', () => {
+  console.log(`✅ Servidor HTTP escuchando en el puerto ${port}`);
 });
 
 // ============================================
-// VARIABLES DE ESTADO
+// CONFIGURACIÓN DEL BOT (CON RECONEXIÓN)
+// ============================================
+let bot = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
+const RECONNECT_DELAY = 5000;
+
+function createBot() {
+  console.log(`🔄 Intentando conectar al servidor ${config.serverHost}:${config.serverPort}...`);
+
+  bot = mineflayer.createBot({
+    host: config.serverHost,
+    port: config.serverPort,
+    username: config.botUsername,
+    auth: 'offline',
+    version: false,
+    viewDistance: config.botChunk || 4,
+    checkTimeoutInterval: 120000,  // 2 minutos
+    hideErrors: false,
+    keepAlive: true
+  });
+
+  // ============================================
+  // EVENTOS DEL BOT
+  // ============================================
+
+  bot.on('connect', () => {
+    console.log('🔗 Conectando al servidor...');
+  });
+
+  bot.on('spawn', () => {
+    console.log(`✅ ${config.botUsername} está listo!`);
+    console.log(`📍 Posición: ${bot.entity.position}`);
+    reconnectAttempts = 0;
+    
+    setTimeout(() => {
+      startAFKRoutine();
+    }, 3000);
+  });
+
+  bot.on('error', (err) => {
+    console.error('⚠️ Error:', err.message);
+    if (err.message.includes('ECONNRESET')) {
+      console.log('🔄 El servidor cerró la conexión. Reconectando...');
+      reconnectBot();
+    }
+  });
+
+  bot.on('end', () => {
+    console.log('⛔️ Bot desconectado!');
+    reconnectBot();
+  });
+
+  bot.on('kicked', (reason) => {
+    console.log(`🚫 El bot fue expulsado: ${reason}`);
+    reconnectBot();
+  });
+
+  return bot;
+}
+
+// ============================================
+// RECONEXIÓN AUTOMÁTICA
+// ============================================
+function reconnectBot() {
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    console.log(`❌ Demasiados intentos fallidos (${MAX_RECONNECT_ATTEMPTS}). Esperando 30 minutos...`);
+    setTimeout(() => {
+      reconnectAttempts = 0;
+      reconnectBot();
+    }, 1800000); // 30 minutos
+    return;
+  }
+
+  reconnectAttempts++;
+  const delay = RECONNECT_DELAY * reconnectAttempts;
+  console.log(`🔄 Reintentando en ${delay/1000} segundos... (Intento ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+  
+  setTimeout(() => {
+    if (bot) {
+      bot.end();
+    }
+    createBot();
+  }, delay);
+}
+
+// ============================================
+// FUNCIONES DEL BOT
 // ============================================
 let movementPhase = 0;
 let isJumping = false;
-let isSneaking = false;
-let isSprinting = false;
-let currentDirection = 0;
-const DIRECTIONS = ['forward', 'back', 'left', 'right'];
-
-// ============================================
-// CONFIGURACIÓN DE MOVIMIENTO (MÁS REALISTA)
-// ============================================
-const CONFIG = {
-  stepInterval: 2000,           // 2 segundos entre cambios
-  jumpDuration: 800,           // Duración del salto
-  sneakDuration: 3000,         // Tiempo agachado
-  sprintDuration: 4000,        // Tiempo de sprint
-  moveDistance: 5,             // Distancia a moverse
-  lookInterval: 5000,          // Mirar alrededor
-  afkMessageInterval: 120000   // Mensaje AFK cada 2 min
+const CONFIG_BOT = {
+  stepInterval: 2000,
+  jumpDuration: 800,
+  sneakDuration: 3000,
+  sprintDuration: 4000,
+  lookInterval: 5000,
+  afkMessageInterval: 120000
 };
-
-// ============================================
-// EVENTOS DEL BOT
-// ============================================
-
-// Cuando el bot aparece en el mundo
-bot.on('spawn', () => {
-  console.log(`✅ ${config.botUsername} está listo!`);
-  console.log(`📍 Posición: ${bot.entity.position}`);
-  
-  // Esperar a que el mundo cargue
-  setTimeout(() => {
-    startAFKRoutine();
-  }, 3000);
-});
-
-// Cuando el bot recibe daño
-bot.on('health', () => {
-  if (bot.health < 10) {
-    console.log(`⚠️ El bot tiene poca vida (${bot.health})`);
-    bot.setControlState('sneak', true);
-  }
-});
-
-// Manejo de errores
-bot.on('error', (err) => {
-  console.error('⚠️ Error:', err.message);
-});
-
-bot.on('end', () => {
-  console.log('⛔️ Bot desconectado!');
-  // Intentar reconectar después de 30 segundos
-  setTimeout(() => {
-    console.log('🔄 Intentando reconectar...');
-    bot.connect();
-  }, 30000);
-});
-
-// ============================================
-// FUNCIONES PRINCIPALES
-// ============================================
 
 function startAFKRoutine() {
   console.log('🔄 Iniciando rutina AFK...');
-  
-  // Iniciar ciclos
   movementCycle();
   lookAround();
   sendAFKMessage();
   checkPosition();
 }
 
-// ============================================
-// CICLO DE MOVIMIENTO (MÁS REALISTA)
-// ============================================
 function movementCycle() {
-  if (!bot.entity || !bot.entity.position) return;
+  if (!bot || !bot.entity || !bot.entity.position) {
+    setTimeout(movementCycle, CONFIG_BOT.stepInterval);
+    return;
+  }
 
-  // Resetear todos los movimientos
-  resetControls();
+  // Resetear controles
+  ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'].forEach(c => {
+    bot.setControlState(c, false);
+  });
 
-  // Calcular dirección aleatoria
-  const direction = DIRECTIONS[Math.floor(Math.random() * DIRECTIONS.length)];
-  const duration = CONFIG.stepInterval;
-
-  // Movimiento base
+  // Movimiento aleatorio
+  const directions = ['forward', 'back', 'left', 'right'];
+  const direction = directions[Math.floor(Math.random() * directions.length)];
+  
   bot.setControlState(direction, true);
   
-  // A veces corre
   if (Math.random() < 0.2) {
     bot.setControlState('sprint', true);
-    setTimeout(() => {
-      bot.setControlState('sprint', false);
-    }, CONFIG.sprintDuration);
+    setTimeout(() => bot.setControlState('sprint', false), CONFIG_BOT.sprintDuration);
   }
 
-  // A veces se agacha
   if (Math.random() < 0.15) {
     bot.setControlState('sneak', true);
-    setTimeout(() => {
-      bot.setControlState('sneak', false);
-    }, CONFIG.sneakDuration);
+    setTimeout(() => bot.setControlState('sneak', false), CONFIG_BOT.sneakDuration);
   }
 
-  // A veces salta
   if (Math.random() < 0.25) {
     bot.setControlState('jump', true);
-    setTimeout(() => {
-      bot.setControlState('jump', false);
-    }, CONFIG.jumpDuration);
+    setTimeout(() => bot.setControlState('jump', false), CONFIG_BOT.jumpDuration);
   }
 
-  // A veces gira
-  if (Math.random() < 0.3) {
-    const yaw = Math.random() * Math.PI * 2;
-    bot.look(yaw, 0);
-  }
-
-  // Programar siguiente ciclo
-  setTimeout(movementCycle, duration + Math.random() * 1000);
+  setTimeout(movementCycle, CONFIG_BOT.stepInterval + Math.random() * 1000);
 }
 
-// ============================================
-// MIRAR ALREDEDOR
-// ============================================
 function lookAround() {
-  if (!bot.entity) return;
+  if (!bot || !bot.entity) {
+    setTimeout(lookAround, CONFIG_BOT.lookInterval);
+    return;
+  }
 
-  // Mirar en una dirección aleatoria
   const yaw = Math.random() * Math.PI * 2;
   const pitch = (Math.random() - 0.5) * 0.5;
-  
   bot.look(yaw, pitch, true);
 
-  // Programar próxima mirada
-  setTimeout(lookAround, CONFIG.lookInterval + Math.random() * 3000);
+  setTimeout(lookAround, CONFIG_BOT.lookInterval + Math.random() * 3000);
 }
 
-// ============================================
-// ENVIAR MENSAJE AFK
-// ============================================
 function sendAFKMessage() {
-  if (!bot.whisper) return;
+  if (!bot || !bot.chat) {
+    setTimeout(sendAFKMessage, CONFIG_BOT.afkMessageInterval);
+    return;
+  }
 
   const messages = [
     '💤 AFK - Manteniendo el servidor activo',
@@ -167,71 +189,32 @@ function sendAFKMessage() {
     '🔄 Manteniendo CPU activa',
     '📡 Servidor online 24/7'
   ];
+  
+  bot.chat(messages[Math.floor(Math.random() * messages.length)]);
 
-  const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-  bot.chat(randomMessage);
-
-  setTimeout(sendAFKMessage, CONFIG.afkMessageInterval + Math.random() * 30000);
+  setTimeout(sendAFKMessage, CONFIG_BOT.afkMessageInterval + Math.random() * 30000);
 }
 
-// ============================================
-// VERIFICAR POSICIÓN (EVITA QUEDARSE ATRAPADO)
-// ============================================
 function checkPosition() {
-  if (!bot.entity) return;
+  if (!bot || !bot.entity) {
+    setTimeout(checkPosition, 30000);
+    return;
+  }
 
   const pos = bot.entity.position;
   console.log(`📍 Posición: ${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)}`);
 
-  // Si el bot está en un lugar por más de 10 segundos sin moverse
+  // Si está atascado, saltar
   if (bot.entity.velocity.x === 0 && bot.entity.velocity.z === 0) {
-    // Intentar saltar para salir de cualquier bloqueo
     bot.setControlState('jump', true);
-    setTimeout(() => {
-      bot.setControlState('jump', false);
-    }, 500);
+    setTimeout(() => bot.setControlState('jump', false), 500);
   }
 
   setTimeout(checkPosition, 30000);
 }
 
 // ============================================
-// FUNCIONES AUXILIARES
+// INICIO DEL BOT
 // ============================================
-function resetControls() {
-  const controls = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'];
-  controls.forEach(control => {
-    bot.setControlState(control, false);
-  });
-}
-
-// ============================================
-// COMANDOS (Desde la consola)
-// ============================================
-process.stdin.on('data', (data) => {
-  const command = data.toString().trim();
-  
-  switch(command) {
-    case 'stop':
-      console.log('🛑 Deteniendo bot...');
-      bot.quit();
-      process.exit(0);
-      break;
-    case 'pos':
-      if (bot.entity) {
-        console.log(`📍 Posición: ${bot.entity.position}`);
-      }
-      break;
-    case 'help':
-      console.log('📋 Comandos disponibles:');
-      console.log('  stop - Detener el bot');
-      console.log('  pos  - Mostrar posición');
-      console.log('  help - Mostrar ayuda');
-      break;
-    default:
-      console.log('❌ Comando desconocido. Usa "help" para ver los comandos.');
-  }
-});
-
 console.log('🤖 Bot de mantenimiento iniciado!');
-console.log('📋 Comandos disponibles: stop, pos, help');
+createBot();
