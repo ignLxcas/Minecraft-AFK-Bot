@@ -21,7 +21,7 @@ app.listen(port, '0.0.0.0', () => {
 });
 
 // ============================================
-// CONFIGURACIÓN DEL BOT (CON RECONEXIÓN)
+// CONFIGURACIÓN DEL BOT
 // ============================================
 let bot = null;
 let reconnectAttempts = 0;
@@ -38,14 +38,10 @@ function createBot() {
     auth: 'offline',
     version: false,
     viewDistance: config.botChunk || 4,
-    checkTimeoutInterval: 120000,  // 2 minutos
+    checkTimeoutInterval: 120000,
     hideErrors: false,
     keepAlive: true
   });
-
-  // ============================================
-  // EVENTOS DEL BOT
-  // ============================================
 
   bot.on('connect', () => {
     console.log('🔗 Conectando al servidor...');
@@ -55,10 +51,7 @@ function createBot() {
     console.log(`✅ ${config.botUsername} está listo!`);
     console.log(`📍 Posición: ${bot.entity.position}`);
     reconnectAttempts = 0;
-    
-    setTimeout(() => {
-      startAFKRoutine();
-    }, 3000);
+    setTimeout(startAFKRoutine, 3000);
   });
 
   bot.on('error', (err) => {
@@ -82,16 +75,13 @@ function createBot() {
   return bot;
 }
 
-// ============================================
-// RECONEXIÓN AUTOMÁTICA
-// ============================================
 function reconnectBot() {
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     console.log(`❌ Demasiados intentos fallidos (${MAX_RECONNECT_ATTEMPTS}). Esperando 30 minutos...`);
     setTimeout(() => {
       reconnectAttempts = 0;
       reconnectBot();
-    }, 1800000); // 30 minutos
+    }, 1800000);
     return;
   }
 
@@ -100,18 +90,14 @@ function reconnectBot() {
   console.log(`🔄 Reintentando en ${delay/1000} segundos... (Intento ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
   
   setTimeout(() => {
-    if (bot) {
-      bot.end();
-    }
+    if (bot) bot.end();
     createBot();
   }, delay);
 }
 
 // ============================================
-// FUNCIONES DEL BOT
+// RUTINA AFK DEL BOT
 // ============================================
-let movementPhase = 0;
-let isJumping = false;
 const CONFIG_BOT = {
   stepInterval: 2000,
   jumpDuration: 800,
@@ -130,20 +116,17 @@ function startAFKRoutine() {
 }
 
 function movementCycle() {
-  if (!bot || !bot.entity || !bot.entity.position) {
+  if (!bot || !bot.entity) {
     setTimeout(movementCycle, CONFIG_BOT.stepInterval);
     return;
   }
 
-  // Resetear controles
   ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'].forEach(c => {
     bot.setControlState(c, false);
   });
 
-  // Movimiento aleatorio
   const directions = ['forward', 'back', 'left', 'right'];
   const direction = directions[Math.floor(Math.random() * directions.length)];
-  
   bot.setControlState(direction, true);
   
   if (Math.random() < 0.2) {
@@ -173,7 +156,6 @@ function lookAround() {
   const yaw = Math.random() * Math.PI * 2;
   const pitch = (Math.random() - 0.5) * 0.5;
   bot.look(yaw, pitch, true);
-
   setTimeout(lookAround, CONFIG_BOT.lookInterval + Math.random() * 3000);
 }
 
@@ -189,9 +171,7 @@ function sendAFKMessage() {
     '🔄 Manteniendo CPU activa',
     '📡 Servidor online 24/7'
   ];
-  
   bot.chat(messages[Math.floor(Math.random() * messages.length)]);
-
   setTimeout(sendAFKMessage, CONFIG_BOT.afkMessageInterval + Math.random() * 30000);
 }
 
@@ -204,7 +184,6 @@ function checkPosition() {
   const pos = bot.entity.position;
   console.log(`📍 Posición: ${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)}`);
 
-  // Si está atascado, saltar
   if (bot.entity.velocity.x === 0 && bot.entity.velocity.z === 0) {
     bot.setControlState('jump', true);
     setTimeout(() => bot.setControlState('jump', false), 500);
@@ -214,7 +193,7 @@ function checkPosition() {
 }
 
 // ============================================
-// INICIO DEL BOT
+// INICIO
 // ============================================
 console.log('🤖 Bot de mantenimiento iniciado!');
 createBot();
