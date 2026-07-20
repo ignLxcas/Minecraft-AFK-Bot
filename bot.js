@@ -21,42 +21,85 @@ app.listen(port, '0.0.0.0', () => {
 });
 
 // ============================================
-// CONFIGURACIÓN DEL BOT
+// CONFIGURACIÓN DEL BOT - VERSIONES MANUALES
 // ============================================
 let bot = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_DELAY = 5000;
 
+// LISTA DE VERSIONES PARA PROBAR (ordenadas por compatibilidad)
+const VERSIONS_TO_TRY = [
+  '1.21.5',
+  '1.21.4',
+  '1.21.3',
+  '1.21.2',
+  '1.21.1',
+  '1.21',
+  '1.20.6',
+  '1.20.5',
+  '1.20.4',
+  '1.20.3',
+  '1.20.2',
+  '1.20.1',
+  '1.20',
+  '1.19.4',
+  '1.19.3',
+  '1.19.2',
+  '1.19.1',
+  '1.19',
+  '1.18.2'
+];
+
+let versionIndex = 0;
+
 function createBot() {
-  console.log(`🔄 Intentando conectar al servidor ${config.serverHost}:${config.serverPort}...`);
+  const version = VERSIONS_TO_TRY[versionIndex] || '1.21.4';
+  console.log(`🔄 Intentando con versión: ${version} al servidor ${config.serverHost}:${config.serverPort}...`);
 
   bot = mineflayer.createBot({
     host: config.serverHost,
     port: config.serverPort,
     username: config.botUsername,
     auth: 'offline',
-    version: '1.21.5',          // <--- CAMBIADO DE 1.21.4 a 1.21.5
+    version: version,
     viewDistance: config.botChunk || 4,
     checkTimeoutInterval: 120000,
     hideErrors: false,
-    keepAlive: true
+    keepAlive: true,
+    // Forzar versión manual para evitar autodetección
+    versionCheck: false
   });
 
   bot.on('connect', () => {
-    console.log('🔗 Conectando al servidor...');
+    console.log(`🔗 Conectando al servidor con versión ${version}...`);
   });
 
   bot.on('spawn', () => {
-    console.log(`✅ ${config.botUsername} está listo!`);
+    console.log(`✅ ${config.botUsername} está listo! (Versión ${version})`);
     console.log(`📍 Posición: ${bot.entity.position}`);
     reconnectAttempts = 0;
+    versionIndex = 0; // Reiniciar al conectar
     setTimeout(startAFKRoutine, 3000);
   });
 
   bot.on('error', (err) => {
-    console.error('⚠️ Error:', err.message);
-    if (err.message.includes('ECONNRESET')) {
+    console.error('⚠️ Error con versión ${version}:', err.message);
+    
+    // Si el error es de versión, probar la siguiente
+    if (err.message.includes('version') || err.message.includes('Outdated client')) {
+      console.log(`❌ Versión ${version} no compatible. Probando siguiente...`);
+      versionIndex++;
+      if (versionIndex < VERSIONS_TO_TRY.length) {
+        setTimeout(createBot, 2000);
+      } else {
+        console.log('❌ Ninguna versión funcionó. Reiniciando ciclo en 5 minutos...');
+        setTimeout(() => {
+          versionIndex = 0;
+          createBot();
+        }, 300000);
+      }
+    } else if (err.message.includes('ECONNRESET')) {
       console.log('🔄 El servidor cerró la conexión. Reconectando...');
       reconnectBot();
     }
@@ -69,7 +112,15 @@ function createBot() {
 
   bot.on('kicked', (reason) => {
     console.log(`🚫 El bot fue expulsado: ${reason}`);
-    reconnectBot();
+    if (reason.includes('Outdated client')) {
+      console.log('❌ Versión incorrecta, probando siguiente...');
+      versionIndex++;
+      if (versionIndex < VERSIONS_TO_TRY.length) {
+        setTimeout(createBot, 2000);
+      }
+    } else {
+      reconnectBot();
+    }
   });
 
   return bot;
